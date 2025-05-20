@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/thinkgos/go-iecp5/asdu"
 	"github.com/thinkgos/go-iecp5/cs104"
+	"iec104/config"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -23,11 +24,9 @@ type Logger interface {
 }
 
 type IEC104Client struct {
-	client     *cs104.Client
-	serverIP   string
-	serverPort int
-	commonAddr int
-	Logger     Logger
+	client *cs104.Client
+	conf   *config.Config
+	Logger Logger
 
 	closer                 chan struct{}
 	mu                     sync.Mutex
@@ -41,11 +40,9 @@ type IEC104Client struct {
 	Teleregulation map[int]TeleregulationPoint
 }
 
-func NewIEC104Client(host string, port, commonAddr int) *IEC104Client {
+func NewIEC104Client(conf *config.Config) *IEC104Client {
 	client := &IEC104Client{
-		serverIP:       host,
-		serverPort:     port,
-		commonAddr:     commonAddr,
+		conf:           conf,
 		closer:         make(chan struct{}),
 		Telemetry:      make(map[int]TelemetryPoint),
 		Teleindication: make(map[int]TeleindPoint),
@@ -53,17 +50,15 @@ func NewIEC104Client(host string, port, commonAddr int) *IEC104Client {
 		Teleregulation: make(map[int]TeleregulationPoint),
 	}
 
-	go client.run(time.Second * 15)
+	go client.run()
 	return client
 }
 
-func (c *IEC104Client) UpdateConfig(host string, port, commonAddr int) {
+func (c *IEC104Client) UpdateConfig(conf *config.Config) {
 	c.mu.Lock()
 	c.mu.Unlock()
 
-	c.serverIP = host
-	c.serverPort = port
-	c.commonAddr = commonAddr
+	c.conf = conf
 }
 
 func (c *IEC104Client) RegisterConnectionStateHandler(handler ConnectionStateHandler) {
@@ -86,7 +81,7 @@ func (c *IEC104Client) Connect() error {
 	option.SetAutoReconnect(true)
 	option.SetReconnectInterval(5 * time.Second)
 
-	err := option.AddRemoteServer(fmt.Sprintf("%s:%d", c.serverIP, c.serverPort))
+	err := option.AddRemoteServer(fmt.Sprintf("%s:%d", c.conf.IPAddress, c.conf.Port))
 	if err != nil {
 		return err
 	}
@@ -99,7 +94,7 @@ func (c *IEC104Client) Connect() error {
 		if c.connectionStateHandler != nil {
 			c.connectionStateHandler(true)
 		}
-		c.Logger.Infof("Connected to server: %s:%d", c.serverIP, c.serverPort)
+		c.Logger.Infof("Connected to server: %s:%d", c.conf.IPAddress, c.conf.Port)
 		client.SendStartDt()
 	})
 
@@ -108,7 +103,7 @@ func (c *IEC104Client) Connect() error {
 		if c.connectionStateHandler != nil {
 			c.connectionStateHandler(false)
 		}
-		c.Logger.Infof("Disconnected from server: %s:%d", c.serverIP, c.serverPort)
+		c.Logger.Infof("Disconnected from server: %s:%d", c.conf.IPAddress, c.conf.Port)
 	})
 
 	err = c.client.Start()
@@ -226,7 +221,7 @@ func (c *IEC104Client) DelayAcquisitionHandler(asdu.Connect, *asdu.ASDU) error {
 }
 
 func (c *IEC104Client) ASDUHandler(client asdu.Connect, a *asdu.ASDU) error {
-	if a.CommonAddr != asdu.CommonAddr(c.commonAddr) {
+	if a.CommonAddr != asdu.CommonAddr(c.conf.CommonAddress) {
 		return nil
 	}
 	switch a.Identifier.Type {
@@ -298,16 +293,21 @@ func (c *IEC104Client) ASDUHandler(client asdu.Connect, a *asdu.ASDU) error {
 	return nil
 }
 
-func (c *IEC104Client) run(callInterval time.Duration) {
+func (c *IEC104Client) run() {
 	time.Sleep(time.Second * 5)
 	c.allCall()
-	timer := time.NewTimer(callInterval)
+	timer := time.NewTimer(time.Second * 5)
 	defer timer.Stop()
 	for {
 		select {
 		case <-timer.C:
 			c.allCall()
-			timer.Reset(callInterval)
+			if c.conf.InterrogationInterval > 0 {
+				callInterval := time.Duration(c.conf.InterrogationInterval) * time.Second
+				timer.Reset(callInterval)
+			} else {
+				timer.Reset(15 * time.Second)
+			}
 		case <-c.closer:
 			return
 		}
@@ -321,7 +321,7 @@ func (c *IEC104Client) allCall() {
 	coa := asdu.CauseOfTransmission{
 		Cause: asdu.Activation,
 	}
-	ca := asdu.CommonAddr(c.commonAddr)
+	ca := asdu.CommonAddr(c.conf.CommonAddress)
 	err := asdu.InterrogationCmd(c.client, coa, ca, asdu.QOIStation)
 	if err != nil {
 		c.Logger.Infof("104 interrogation error = %v", err)

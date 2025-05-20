@@ -18,6 +18,21 @@ const (
 	Teleregulation
 )
 
+func (d DataType) String() string {
+	switch d {
+	case Telemetry:
+		return "Telemetry"
+	case Teleindication:
+		return "Teleindication"
+	case Telecontrol:
+		return "Telecontrol"
+	case Teleregulation:
+		return "Teleregulation"
+	default:
+		return "Unknown"
+	}
+}
+
 // DataPoint represents a generic IEC104 data point
 type DataPoint struct {
 	Address     int

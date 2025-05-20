@@ -33,7 +33,7 @@ func NewApp(cfg *config.Config) *App {
 	app := &App{
 		app:        tview.NewApplication(),
 		config:     cfg,
-		iecClient:  iec_client.NewIEC104Client(cfg.IPAddress, cfg.Port, cfg.CommonAddress),
+		iecClient:  iec_client.NewIEC104Client(cfg),
 		currentTab: iec_client.Telemetry,
 	}
 
@@ -52,7 +52,7 @@ func (a *App) setupUI() {
 	a.setupLogView()
 
 	// Create logger
-	a.logger = NewLogger(a.logView, LoggerLevelDebug)
+	a.logger = NewLogger(a.logView, LoggerLevelInfo)
 	a.logger.Infof("Application started")
 
 	// Setup config form
@@ -104,9 +104,15 @@ func (a *App) setupUI() {
 		case iec_client.Telemetry:
 			rowMax = int(math.Ceil(float64(a.config.TelemetryCount) / 10))
 			address = iot - 0x4000 - 1
+			if address > a.config.TelemetryCount {
+				return
+			}
 		case iec_client.Teleindication:
 			rowMax = int(math.Ceil(float64(a.config.TeleindCount) / 10))
 			address = iot - 1
+			if address > a.config.TeleindCount {
+				return
+			}
 		default:
 			return
 		}
@@ -115,22 +121,22 @@ func (a *App) setupUI() {
 			return
 		}
 
-		row := address/10 + 1
+		row := (address/10 + 1) * 2
 		col := address%10 + 1
 
-		if row > rowMax {
+		if row > rowMax*2 {
 			return
 		}
 
 		a.app.QueueUpdateDraw(func() {
 			switch val := data.(type) {
 			case float64:
-				a.dataTable.SetCell(row, col, tview.NewTableCell(fmt.Sprintf("%.2f", val)).SetSelectable(false))
+				a.dataTable.SetCell(row, col, tview.NewTableCell(fmt.Sprintf("%.2f", val)))
 			case bool:
 				if val {
-					a.dataTable.SetCell(row, col, tview.NewTableCell("ON").SetSelectable(false))
+					a.dataTable.SetCell(row, col, tview.NewTableCell("ON"))
 				} else {
-					a.dataTable.SetCell(row, col, tview.NewTableCell("OFF").SetSelectable(false))
+					a.dataTable.SetCell(row, col, tview.NewTableCell("OFF"))
 				}
 			}
 		})
@@ -191,6 +197,11 @@ func (a *App) setupDataTable() {
 			// Only respond to clicks on the action column (column 4)
 			a.logger.Infof("Selected Telecontrol row %d, column %d", row-1, column-1)
 			a.showTeleregulationDialog(row, column)
+		case iec_client.Telemetry, iec_client.Teleindication:
+			// Only respond to clicks on the action column (column 0)
+			a.logger.Infof("Selected %s row %d, column %d", a.currentTab, row-1, column-1)
+			a.showDescriptionDialog(row, column)
+
 		}
 
 		a.dataTable.SetSelectable(false, false)
@@ -274,7 +285,20 @@ func (a *App) updateTableData() {
 	case iec_client.Telemetry:
 		rowMax := int(math.Ceil(float64(a.config.TelemetryCount) / 10))
 		for row := 0; row < rowMax; row++ {
-			a.dataTable.SetCell(row+1, 0, tview.NewTableCell(strconv.Itoa(row*10)).SetSelectable(false))
+			a.dataTable.SetCell((row)*2+1, 0, tview.NewTableCell(strconv.Itoa(row*10)).SetSelectable(false))
+			a.dataTable.SetCell((row+1)*2, 0, tview.NewTableCell(strconv.Itoa(row*10)).SetSelectable(false))
+		}
+		for index, desc := range a.config.TelemetryDescriptions {
+			row := (index/10+1)*2 - 1
+			col := index%10 + 1
+			if row > rowMax*2 {
+				continue
+			}
+			if row < 1 {
+				a.logger.Errorf("Invalid telemetry row: %d", row)
+				continue
+			}
+			a.dataTable.SetCell(row, col, tview.NewTableCell(desc).SetTextColor(tcell.ColorGreen).SetSelectable(false))
 		}
 		for address, point := range a.iecClient.Telemetry {
 			address = address - 0x4000 - 1
@@ -282,19 +306,35 @@ func (a *App) updateTableData() {
 				a.logger.Errorf("Invalid telemetry address: %d", address)
 				continue
 			}
-			row := address/10 + 1
+			if address >= a.config.TelemetryCount {
+				continue
+			}
+			row := (address/10 + 1) * 2
 			col := address%10 + 1
 
-			if row > rowMax {
+			if row > rowMax*2 {
 				continue
 			}
 
-			a.dataTable.SetCell(row, col, tview.NewTableCell(fmt.Sprintf("%.2f", point.Value)).SetSelectable(false))
+			a.dataTable.SetCell(row, col, tview.NewTableCell(fmt.Sprintf("%.2f", point.Value)))
 		}
 	case iec_client.Teleindication:
 		rowMax := int(math.Ceil(float64(a.config.TeleindCount) / 10))
 		for row := 0; row < rowMax; row++ {
-			a.dataTable.SetCell(row+1, 0, tview.NewTableCell(strconv.Itoa(row*10)).SetSelectable(false))
+			a.dataTable.SetCell((row)*2+1, 0, tview.NewTableCell(strconv.Itoa(row*10)).SetSelectable(false))
+			a.dataTable.SetCell((row+1)*2, 0, tview.NewTableCell(strconv.Itoa(row*10)).SetSelectable(false))
+		}
+		for index, desc := range a.config.TeleindDescriptions {
+			row := (index/10+1)*2 - 1
+			col := index%10 + 1
+			if row > rowMax*2 {
+				continue
+			}
+			if row < 1 {
+				a.logger.Errorf("Invalid teleindication row: %d", row)
+				continue
+			}
+			a.dataTable.SetCell(row, col, tview.NewTableCell(desc).SetTextColor(tcell.ColorGreen).SetSelectable(false))
 		}
 		for address, point := range a.iecClient.Teleindication {
 			address = address - 1
@@ -302,11 +342,14 @@ func (a *App) updateTableData() {
 				a.logger.Errorf("Invalid teleindication address: %d", address)
 				continue
 			}
+			if address >= a.config.TeleindCount {
+				continue
+			}
 
-			row := address/10 + 1
+			row := (address/10 + 1) * 2
 			col := address%10 + 1
 
-			if row > rowMax {
+			if row > rowMax*2 {
 				continue
 			}
 
@@ -314,7 +357,7 @@ func (a *App) updateTableData() {
 			if point.Value {
 				val = "ON"
 			}
-			a.dataTable.SetCell(row, col, tview.NewTableCell(val).SetSelectable(false))
+			a.dataTable.SetCell(row, col, tview.NewTableCell(val))
 		}
 	case iec_client.Telecontrol:
 		rowMax := 10
@@ -402,7 +445,7 @@ func (a *App) saveConfig() {
 		return
 	}
 
-	a.iecClient.UpdateConfig(a.config.IPAddress, a.config.Port, a.config.CommonAddress)
+	a.iecClient.UpdateConfig(a.config)
 
 	a.logger.Infof("Configuration saved successfully")
 }
@@ -467,6 +510,11 @@ func (a *App) showConfigDialog() {
 		var tic int
 		fmt.Sscanf(text, "%d", &tic)
 		a.config.TeleindCount = tic
+	})
+	form.AddInputField("Interrogation Interval (s)", fmt.Sprintf("%d", a.config.InterrogationInterval), 10, nil, func(text string) {
+		var ii int
+		fmt.Sscanf(text, "%d", &ii)
+		a.config.InterrogationInterval = ii
 	})
 
 	// Add buttons
@@ -582,6 +630,74 @@ func (a *App) showTeleregulationDialog(row, col int) {
 			a.iecClient.Teleregulation[index] = iec_client.TeleregulationPoint{
 				Value: value,
 			}
+		}
+		a.pages.RemovePage("dialog")
+	})
+	form.AddButton("Cancel", func() {
+		a.pages.RemovePage("dialog")
+	})
+
+	// Create a modal for the form
+	modal := tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(nil, 0, 1, false).
+		AddItem(tview.NewFlex().
+			SetDirection(tview.FlexColumn).
+			AddItem(nil, 0, 1, false).
+			AddItem(form, 40, 1, true).
+			AddItem(nil, 0, 1, false),
+			10, 1, true).
+		AddItem(nil, 0, 1, false)
+
+	// Add the page and show it
+	a.pages.AddPage("dialog", modal, true, true)
+}
+
+// showDescriptionDialog shows a dialog for editing point descriptions
+func (a *App) showDescriptionDialog(row, col int) {
+	index := (row-1)/2*10 + col - 1
+
+	var currentDesc string
+	switch a.currentTab {
+	case iec_client.Telemetry:
+		currentDesc = a.config.TelemetryDescriptions[index]
+	case iec_client.Teleindication:
+		currentDesc = a.config.TeleindDescriptions[index]
+	}
+
+	// Create form for description
+	form := tview.NewForm()
+	form.SetBorder(true).SetTitle("Edit Point Description")
+
+	// Add address field (read-only)
+	form.AddInputField("Offset", fmt.Sprintf("%d", index), 10, nil, nil).
+		SetFieldBackgroundColor(tcell.ColorDarkGray)
+
+	// Add description field
+	form.AddInputField("Description", currentDesc, 40, nil, func(text string) {
+		currentDesc = text
+	})
+
+	// Add buttons
+	form.AddButton("Save", func() {
+		// 保存描述
+		switch a.currentTab {
+		case iec_client.Telemetry:
+			a.config.TelemetryDescriptions[index] = currentDesc
+		case iec_client.Teleindication:
+			a.config.TeleindDescriptions[index] = currentDesc
+		}
+
+		// 保存配置
+		if err := a.config.Save(); err != nil {
+			a.logger.Errorf("Error saving description: %v", err)
+		} else {
+			a.logger.Infof("Description saved for offset %d", index)
+			if row-1 < 1 {
+				a.logger.Errorf("Invalid offset %d", index)
+				return
+			}
+			a.dataTable.SetCell(row-1, col, tview.NewTableCell(currentDesc).SetTextColor(tcell.ColorGreen).SetSelectable(false))
 		}
 		a.pages.RemovePage("dialog")
 	})

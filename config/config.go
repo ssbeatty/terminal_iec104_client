@@ -9,21 +9,29 @@ const filePath = "config.json"
 
 // Config holds the application configuration
 type Config struct {
-	IPAddress      string
-	Port           int
-	CommonAddress  int
-	TelemetryCount int
-	TeleindCount   int
+	IPAddress             string
+	Port                  int
+	CommonAddress         int
+	TelemetryCount        int
+	TeleindCount          int
+	InterrogationInterval int // in seconds
+
+	TelemetryDescriptions map[int]string `json:"telemetry_descriptions"`
+	TeleindDescriptions   map[int]string `json:"teleind_descriptions"`
 }
 
 // NewConfig creates a new configuration with default values
 func NewConfig() *Config {
 	return &Config{
-		IPAddress:      "127.0.0.1",
-		Port:           2404,
-		CommonAddress:  1,
-		TelemetryCount: 100,
-		TeleindCount:   100,
+		IPAddress:             "127.0.0.1",
+		Port:                  2404,
+		CommonAddress:         1,
+		TelemetryCount:        100,
+		TeleindCount:          100,
+		InterrogationInterval: 15,
+
+		TelemetryDescriptions: make(map[int]string),
+		TeleindDescriptions:   make(map[int]string),
 	}
 }
 
